@@ -1,13 +1,17 @@
 #include <iostream>
+#include <tuple>
 using namespace std;
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 using namespace cv;
-#include "run_darknet.h"
+#include "darknet.h"
 
 #define POSE_MAX_PEOPLE 96
 #define NET_OUT_CHANNELS 57 // 38 for pafs, 19 for parts
+
+
+static network* net;
 
 template<typename T>
 inline int intRound(const T a)
@@ -21,7 +25,7 @@ inline T fastMin(const T a, const T b)
     return (a < b ? a : b);
 }
 
-void render_pose_keypoints
+static void render_pose_keypoints
     (
     Mat& frame,
     const vector<float>& keypoints,
@@ -82,7 +86,7 @@ void render_pose_keypoints
         }
 }
 
-void connect_bodyparts
+static void connect_bodyparts
     (
     vector<float>& pose_keypoints,
     const float* const map,
@@ -390,7 +394,7 @@ void connect_bodyparts
         }
 }
 
-void find_heatmap_peaks
+static void find_heatmap_peaks
     (
     const float *src,
     float *dst,
@@ -471,7 +475,7 @@ void find_heatmap_peaks
         }
 }
 
-Mat create_netsize_im
+static Mat create_netsize_im
     (
     const Mat &im,
     const int netw,
@@ -498,89 +502,117 @@ Mat create_netsize_im
     return dst;
 }
 
-int main
-    (
-    int ac,
-    char **av
-    )
+extern "C" {
+  void run_pose(int ac, char** av);
+}
+void run_pose(int ac, char **av)
 {
-    if (ac != 4)
-        {
-        cout << "usage: ./bin [image file] [cfg file] [weight file]" << endl;
-        return 1;
-        }
+    if (ac < 5) {
+        cout << "usage: ./darknet pose [demo] <img file> <cfg file> <weight file>" << endl;
+        return;
+    }
 
     // 1. read args
-    char *im_path = av[1];
-    char *cfg_path = av[2];
-    char *weight_path = av[3];
-    Mat im = imread(im_path);
-    if (im.empty())
-        {
+    VideoCapture* cap = NULL;
+    char *im_path = av[2];
+    char *cfg_path = av[3];
+    char *weight_path = av[4];
+    int demo_done = 0;
+    Mat im;
+    if (strcmp(av[2], "demo") == 0) {
+      im_path = av[3];
+      cfg_path = av[4];
+      weight_path = av[5];
+      printf("video file: %s\n", im_path);
+      cap = (VideoCapture*)open_video_stream(im_path, 0, 0, 0, 0);
+    }
+    if (cap) {
+      *cap >> im;
+      make_window("Demo", im.size().width, im.size().height, 0);
+    }
+    else {
+      demo_done = 1;
+      im = imread(im_path);
+      if (im.empty()) {
         cout << "failed to read image" << endl;
-        return 1;
-        }
+        return;
+      }
+    }
 
     // 2. initialize net
-    int net_inw = 0;
-    int net_inh = 0;
-    int net_outw = 0;
-    int net_outh = 0;
-    init_net(cfg_path, weight_path, &net_inw, &net_inh, &net_outw, &net_outh);
+    net = load_network(cfg_path, weight_path, 0);
+    set_batch_network(net, 1);
 
-    // 3. resize to net input size, put scaled image on the top left
-    float scale = 0.0f;
-    Mat netim = create_netsize_im(im, net_inw, net_inh, &scale);
+    int net_inw = net->w;
+    int net_inh = net->h;
+    int net_outw = net->layers[net->n - 2].out_w;
+    int net_outh = net->layers[net->n - 2].out_h;
 
-    // 4. normalized to float type
-    netim.convertTo(netim, CV_32F, 1 / 256.f, -0.5);
+    do {
+      // 3. resize to net input size, put scaled image on the top left
+      float scale = 0.0f;
+      Mat netim = create_netsize_im(im, net_inw, net_inh, &scale);
 
-    // 5. split channels
-    float *netin_data = new float[net_inw * net_inh * 3]();
-    float *netin_data_ptr = netin_data;
-    vector<Mat> input_channels;
-    for (int i = 0; i < 3; ++i)
-        {
-        Mat channel(net_inh, net_inw, CV_32FC1, netin_data_ptr);
-        input_channels.emplace_back(channel);
-        netin_data_ptr += (net_inw * net_inh);
+      // 4. normalized to float type
+      netim.convertTo(netim, CV_32F, 1 / 256.f, -0.5);
+
+      // 5. split channels
+      float *netin_data = new float[net_inw * net_inh * 3]();
+      float *netin_data_ptr = netin_data;
+      vector<Mat> input_channels;
+      for (int i = 0; i < 3; ++i) {
+          Mat channel(net_inh, net_inw, CV_32FC1, netin_data_ptr);
+          input_channels.emplace_back(channel);
+          netin_data_ptr += (net_inw * net_inh);
+      }
+      split(netim, input_channels);
+
+      // 6. feed forward
+      double time_begin = getTickCount();
+      network_predict(net, netin_data);
+      float *netoutdata = net->output;
+
+      double fee_time = (getTickCount() - time_begin) / getTickFrequency() * 1000;
+      cout << "forward fee: " << fee_time << "ms" << endl;
+
+      // 7. resize net output back to input size to get heatmap
+      float *heatmap = new float[net_inw * net_inh * NET_OUT_CHANNELS];
+      for (int i = 0; i < NET_OUT_CHANNELS; ++i) {
+          Mat netout(net_outh, net_outw, CV_32F, (netoutdata + net_outh*net_outw*i));
+          Mat nmsin(net_inh, net_inw, CV_32F, heatmap + net_inh*net_inw*i);
+          resize(netout, nmsin, Size(net_inw, net_inh), 0, 0, CV_INTER_CUBIC);
+      }
+
+      // 8. get heatmap peaks
+      float *heatmap_peaks = new float[3 * (POSE_MAX_PEOPLE+1) * (NET_OUT_CHANNELS-1)];
+      find_heatmap_peaks(heatmap, heatmap_peaks, net_inw, net_inh, NET_OUT_CHANNELS, 0.05);
+
+      // 9. link parts
+      vector<float> keypoints;
+      vector<int> shape;
+      connect_bodyparts(keypoints, heatmap, heatmap_peaks, net_inw, net_inh, 9, 0.05, 6, 0.4, shape);
+
+      // 10. draw result
+      render_pose_keypoints(im, keypoints, shape, 0.05, scale);
+
+      // 11. show result
+      imshow("Demo", im);
+
+      if (cap) {
+        *cap >> im;
+        if (im.empty()) {
+          demo_done = 1;
         }
-    split(netim, input_channels);
+      }
+      waitKey(demo_done? 0: 1);
+      if (demo_done) {
+        cout << "people: " << shape[0] << endl;
+      }
+      delete [] heatmap_peaks;
+      delete [] heatmap;
+      delete [] netin_data;
+    } while (!demo_done);
 
-    // 6. feed forward
-    double time_begin = getTickCount();
-    float *netoutdata = run_net(netin_data);
-    double fee_time = (getTickCount() - time_begin) / getTickFrequency() * 1000;
-    cout << "forward fee: " << fee_time << "ms" << endl;
-
-    // 7. resize net output back to input size to get heatmap
-    float *heatmap = new float[net_inw * net_inh * NET_OUT_CHANNELS];
-    for (int i = 0; i < NET_OUT_CHANNELS; ++i)
-        {
-        Mat netout(net_outh, net_outw, CV_32F, (netoutdata + net_outh*net_outw*i));
-        Mat nmsin(net_inh, net_inw, CV_32F, heatmap + net_inh*net_inw*i);
-        resize(netout, nmsin, Size(net_inw, net_inh), 0, 0, CV_INTER_CUBIC);
-        }
-
-    // 8. get heatmap peaks
-    float *heatmap_peaks = new float[3 * (POSE_MAX_PEOPLE+1) * (NET_OUT_CHANNELS-1)];
-    find_heatmap_peaks(heatmap, heatmap_peaks, net_inw, net_inh, NET_OUT_CHANNELS, 0.05);
-
-    // 9. link parts
-    vector<float> keypoints;
-    vector<int> shape;
-    connect_bodyparts(keypoints, heatmap, heatmap_peaks, net_inw, net_inh, 9, 0.05, 6, 0.4, shape);
-
-    // 10. draw result
-    render_pose_keypoints(im, keypoints, shape, 0.05, scale);
-
-    // 11. show and save result
-    cout << "people: " << shape[0] << endl;
-    imshow("demo", im);
-    waitKey(0);
-
-    delete [] heatmap_peaks;
-    delete [] heatmap;
-    delete [] netin_data;
-    return 0;
+    return;
 }
+

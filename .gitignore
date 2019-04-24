@@ -1,0 +1,4 @@
+*.weight
+obj
+*.o
+darknet
