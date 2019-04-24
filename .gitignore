@@ -2,3 +2,5 @@
 obj
 *.o
 darknet
+*.a
+*.so
