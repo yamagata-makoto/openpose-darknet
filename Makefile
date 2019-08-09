@@ -1,5 +1,5 @@
 GPU=1
-CUDNN=1
+CUDNN=0
 OPENCV=1
 OPENMP=0
 DEBUG=0
@@ -7,8 +7,8 @@ DEBUG=0
 ARCH= -gencode arch=compute_30,code=sm_30 \
       -gencode arch=compute_35,code=sm_35 \
       -gencode arch=compute_50,code=[sm_50,compute_50] \
-      -gencode arch=compute_52,code=[sm_52,compute_52]
-#      -gencode arch=compute_20,code=[sm_20,sm_21] \ This one is deprecated?
+      -gencode arch=compute_52,code=[sm_52,compute_52] \
+      -gencode arch=compute_61,code=[sm_61,compute_61]
 
 # This is what I use, uncomment if you know your arch and want to specify
 # ARCH= -gencode arch=compute_52,code=compute_52
@@ -49,7 +49,7 @@ endif
 ifeq ($(GPU), 1) 
 COMMON+= -DGPU -I/usr/local/cuda/include/
 CFLAGS+= -DGPU
-LDFLAGS+= -L/usr/lib/cuda/lib64 -lcuda -lcudart -lcublas -lcurand
+LDFLAGS+= -L/usr/local/cuda/lib64 -L/usr/lib/cuda/lib64 -lcuda -lcudart -lcublas -lcurand
 endif
 
 ifeq ($(CUDNN), 1) 

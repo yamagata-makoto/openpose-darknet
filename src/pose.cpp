@@ -492,6 +492,7 @@ run_pose(int ac, char** av)
 
   do {
     // 3. resize to net input size, put scaled image on the top left
+    double time_begin = getTickCount();
     float scale = 0.0f;
     Mat netim = create_netsize_im(im, net_inw, net_inh, &scale);
 
@@ -509,13 +510,9 @@ run_pose(int ac, char** av)
     }
     split(netim, input_channels);
 
-    // 6. feed forward
-    double time_begin = getTickCount();
+    // 6. feed forward    
     network_predict(net, netin_data);
     float* netoutdata = net->output;
-
-    double fee_time = (getTickCount() - time_begin) / getTickFrequency() * 1000;
-    cout << "forward fee: " << fee_time << "ms" << endl;
 
     // 7. resize net output back to input size to get heatmap
     float* heatmap = new float[net_inw * net_inh * NET_OUT_CHANNELS];
@@ -558,6 +555,8 @@ run_pose(int ac, char** av)
         demo_done = 1;
       }
     }
+    double fee_time = (getTickCount() - time_begin) / getTickFrequency() * 1000;
+    cout << "forward fee: " << 1.0/(fee_time/1000) << " FPS" << endl;
     waitKey(demo_done ? 0 : 1);
     if (demo_done) {
       cout << "people: " << shape[0] << endl;

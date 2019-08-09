@@ -9,62 +9,86 @@ using namespace cv;
 
 extern "C" {
 
-IplImage *image_to_ipl(image im)
-{
-    int x,y,c;
-    IplImage *disp = cvCreateImage(cvSize(im.w,im.h), IPL_DEPTH_8U, im.c);
-    int step = disp->widthStep;
-    for(y = 0; y < im.h; ++y){
-        for(x = 0; x < im.w; ++x){
-            for(c= 0; c < im.c; ++c){
-                float val = im.data[c*im.h*im.w + y*im.w + x];
-                disp->imageData[y*step + x*im.c + c] = (unsigned char)(val*255);
-            }
-        }
-    }
-    return disp;
-}
+// IplImage *image_to_ipl(image im)
+// {
+//     int x,y,c;
+//     IplImage *disp = cvCreateImage(cvSize(im.w,im.h), IPL_DEPTH_8U, im.c);
+//     int step = disp->widthStep;
+//     for(y = 0; y < im.h; ++y){
+//         for(x = 0; x < im.w; ++x){
+//             for(c= 0; c < im.c; ++c){
+//                 float val = im.data[c*im.h*im.w + y*im.w + x];
+//                 disp->imageData[y*step + x*im.c + c] = (unsigned char)(val*255);
+//             }
+//         }
+//     }
+//     return disp;
+// }
 
-image ipl_to_image(IplImage* src)
+// image ipl_to_image(IplImage* src)
+// {
+//     int h = src->height;
+//     int w = src->width;
+//     int c = src->nChannels;
+//     image im = make_image(w, h, c);
+//     unsigned char *data = (unsigned char *)src->imageData;
+//     int step = src->widthStep;
+//     int i, j, k;
+
+//     for(i = 0; i < h; ++i){
+//         for(k= 0; k < c; ++k){
+//             for(j = 0; j < w; ++j){
+//                 im.data[k*w*h + i*w + j] = data[i*step + j*c + k]/255.;
+//             }
+//         }
+//     }
+//     return im;
+// }
+
+image mat_to_image(cv::Mat mat)
 {
-    int h = src->height;
-    int w = src->width;
-    int c = src->nChannels;
+    int w = mat.cols;
+    int h = mat.rows;
+    int c = mat.channels();
     image im = make_image(w, h, c);
-    unsigned char *data = (unsigned char *)src->imageData;
-    int step = src->widthStep;
-    int i, j, k;
-
-    for(i = 0; i < h; ++i){
-        for(k= 0; k < c; ++k){
-            for(j = 0; j < w; ++j){
-                im.data[k*w*h + i*w + j] = data[i*step + j*c + k]/255.;
+    unsigned char *data = (unsigned char *)mat.data;
+    int step = mat.step;
+    for (int y = 0; y < h; ++y) {
+        for (int k = 0; k < c; ++k) {
+            for (int x = 0; x < w; ++x) {
+                im.data[k*w*h + y*w + x] = data[y*step + x*c + k] / 255.0f;
             }
         }
     }
     return im;
 }
 
-Mat image_to_mat(image im)
+Mat image_to_mat(image img)
 {
-    image copy = copy_image(im);
-    constrain_image(copy);
-    if(im.c == 3) rgbgr_image(copy);
+    int channels = img.c;
+    int width = img.w;
+    int height = img.h;
+    cv::Mat mat = cv::Mat(height, width, CV_8UC(channels));
+    int step = mat.step;
 
-    IplImage *ipl = image_to_ipl(copy);
-    Mat m = cvarrToMat(ipl, true);
-    cvReleaseImage(&ipl);
-    free_image(copy);
-    return m;
+    for (int y = 0; y < img.h; ++y) {
+        for (int x = 0; x < img.w; ++x) {
+            for (int c = 0; c < img.c; ++c) {
+                float val = img.data[c*img.h*img.w + y*img.w + x];
+                mat.data[y*step + x*img.c + c] = (unsigned char)(val * 255);
+            }
+        }
+    }
+    return mat;
 }
 
-image mat_to_image(Mat m)
-{
-    IplImage ipl = m;
-    image im = ipl_to_image(&ipl);
-    rgbgr_image(im);
-    return im;
-}
+// image mat_to_image(Mat m)
+// {
+//     IplImage ipl = m;
+//     image im = ipl_to_image(&ipl);
+//     rgbgr_image(im);
+//     return im;
+// }
 
 void *open_video_stream(const char *f, int c, int w, int h, int fps)
 {
